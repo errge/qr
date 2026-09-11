@@ -28,6 +28,15 @@
     pointer-events: none;
     z-index: 1;
   }
+  #install-button {
+    position: fixed;
+    top: 0.35rem;
+    right: 0.5rem;
+    z-index: 1;
+    font-size: 0.75rem;
+    padding: 0.3rem 0.6rem;
+    margin: 0;
+  }
   #form-view form { max-width: 30rem; margin: 0 auto; }
   .add-row { display: flex; gap: 0.5rem; }
   .add-row input { flex: 1; min-width: 0; margin: 0; }
@@ -153,7 +162,8 @@
 <main id="form-view" class="container">
   <!-- Bump alongside sw.js's CACHE_NAME on every deploy - lets you confirm at
        a glance that GitHub Pages redeployed *and* the service worker updated. -->
-  <div id="version-tag">v5</div>
+  <div id="version-tag">v6</div>
+  <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
       <input id="text-input" name="text" type="text" pattern="[A-Za-z0-9]+" autocomplete="off" autocapitalize="off" spellcheck="false" required aria-label="Code">
@@ -430,6 +440,39 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   });
 }
+
+// Custom "Install app" button, for browsers that support beforeinstallprompt
+// but don't (yet, or ever) surface their own obvious install entry point.
+// Chrome only fires this event when it considers the manifest installable,
+// so the button naturally never appears otherwise - nothing to feature-detect.
+const installButton = document.getElementById('install-button');
+let deferredInstallPrompt = null;
+
+function isRunningInstalled() {
+  return window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: fullscreen)').matches ||
+    window.navigator.standalone === true; // iOS Safari's own flag
+}
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  if (isRunningInstalled()) return; // already launched as the installed app
+  deferredInstallPrompt = e;
+  installButton.hidden = false;
+});
+
+installButton.addEventListener('click', async () => {
+  if (!deferredInstallPrompt) return;
+  installButton.hidden = true;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice.catch(() => {});
+  deferredInstallPrompt = null;
+});
+
+window.addEventListener('appinstalled', () => {
+  installButton.hidden = true;
+  deferredInstallPrompt = null;
+});
 </script>
 </body>
 </html>
