@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QR Mirror</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.2.1/umd/zxing-browser.min.js"></script>
+<style>
+  body { padding-block: 2rem; }
+  #scan-view video {
+    width: 100%;
+    max-width: 640px;
+    display: block;
+    margin: 0 auto;
+    border-radius: var(--pico-border-radius);
+    background: #000;
+  }
+  #status { text-align: center; }
+  #result-view dt { font-weight: bold; margin-top: 0.75rem; }
+  #result-view dd { margin: 0; }
+  #raw-text {
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-family: monospace;
+    background: var(--pico-code-background-color);
+    padding: 0.75rem;
+    border-radius: var(--pico-border-radius);
+  }
+  #camera-panel { max-width: 640px; margin: 1rem auto 0; }
+  .control-row { display: grid; grid-template-columns: 9rem 1fr 3.5rem; gap: 0.5rem; align-items: center; margin-bottom: 0.4rem; }
+  .control-row label { margin: 0; font-size: 0.85rem; }
+  .control-row output { font-size: 0.8rem; font-family: monospace; text-align: right; }
+  .control-row select, .control-row input[type="range"] { margin: 0; }
+  #debug-json {
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-family: monospace;
+    font-size: 0.75rem;
+    max-height: 16rem;
+    overflow: auto;
+    background: var(--pico-code-background-color);
+    padding: 0.5rem;
+    border-radius: var(--pico-border-radius);
+  }
+  #engine-badge { font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<main class="container">
+  <h1>QR Mirror &mdash; Scan</h1>
+
+  <section id="scan-view">
+    <p id="status" aria-busy="true">Requesting camera permission&hellip;</p>
+    <video id="video" playsinline autoplay muted></video>
+
+    <div id="camera-panel">
+      <div class="control-row">
+        <label for="device-select">Camera</label>
+        <select id="device-select"></select>
+        <span></span>
+      </div>
+      <div class="control-row">
+        <label for="engine-select">Decode engine</label>
+        <select id="engine-select">
+          <option value="auto">Auto (native first)</option>
+          <option value="native">Native BarcodeDetector</option>
+          <option value="zxing">ZXing.js</option>
+        </select>
+        <span id="engine-badge"></span>
+      </div>
+
+      <div id="dynamic-controls"></div>
+
+      <p><button id="reset-controls" class="secondary outline" type="button">Reset camera to auto</button></p>
+
+      <details>
+        <summary>Debug: camera capabilities &amp; settings</summary>
+        <pre id="debug-json">(loading&hellip;)</pre>
+      </details>
+    </div>
+  </section>
+
+  <section id="result-view" hidden>
+    <article>
+      <h2>Code read</h2>
+      <dl id="result-fields"></dl>
+      <h3>Raw data</h3>
+      <div id="raw-text"></div>
+    </article>
+    <p><a href="javascript:void(0)" onclick="location.reload()" role="button">Scan another code (reload)</a></p>
+  </section>
+</main>
+
+<script>
+const statusEl = document.getElementById('status');
+const scanView = document.getElementById('scan-view');
+const resultView = document.getElementById('result-view');
+const videoEl = document.getElementById('video');
+const fieldsEl = document.getElementById('result-fields');
+const rawTextEl = document.getElementById('raw-text');
+const deviceSelect = document.getElementById('device-select');
+const engineSelect = document.getElementById('engine-select');
+const engineBadge = document.getElementById('engine-badge');
+const dynamicControls = document.getElementById('dynamic-controls');
+const debugJsonEl = document.getElementById('debug-json');
+const resetControlsBtn = document.getElementById('reset-controls');
+
+// From zxing-js/library ResultMetadataType enum (not re-exported by @zxing/browser),
+// so the ordering is hardcoded here, pinned to @zxing/browser@0.2.1, to translate
+// the numeric map keys returned by Result.getResultMetadata().
+const RESULT_METADATA_TYPE_NAMES = [
+  'OTHER',
+  'ORIENTATION',
+  'BYTE_SEGMENTS',
+  'ERROR_CORRECTION_LEVEL',
+  'ISSUE_NUMBER',
+  'SUGGESTED_PRICE',
+  'POSSIBLE_COUNTRY',
+  'UPC_EAN_EXTENSION',
+  'PDF417_EXTRA_METADATA',
+  'STRUCTURED_APPEND_SEQUENCE',
+  'STRUCTURED_APPEND_PARITY',
+  'ERRORS_CORRECTED',
+];
+
+// DecodeHintType.TRY_HARDER, same story: not re-exported, but its numeric value
+// (3) is stable for the pinned build, and the reader compares by that raw number.
+const DECODE_HINT_TRY_HARDER = 3;
+
+// Range-valued camera capabilities we know how to expose as sliders.
+const RANGE_CAPS = ['zoom', 'focusDistance', 'exposureCompensation', 'exposureTime', 'brightness', 'contrast', 'saturation', 'sharpness', 'colorTemperature', 'frameRate'];
+// Enum-valued camera capabilities we expose as <select>.
+const ENUM_CAPS = ['focusMode', 'exposureMode', 'whiteBalanceMode'];
+
+let currentStream = null;
+let currentTrack = null;
+let stopDecodeLoop = null; // called to cancel whichever decode loop is running
+let advanced = {}; // accumulated advanced constraints we've applied
+let nativeSupport = null; // { available: bool, formats: string[] }, filled in by probeNativeSupport()
+
+// The native BarcodeDetector backend only exists on macOS, ChromeOS and Android;
+// on Windows/Linux Chrome the class can be present but getSupportedFormats() comes
+// back empty because there's no OS decoder for it to call into.
+async function probeNativeSupport() {
+  if (!('BarcodeDetector' in window)) return { available: false, formats: [] };
+  try {
+    const formats = await BarcodeDetector.getSupportedFormats();
+    return { available: !!(formats && formats.length), formats: formats || [] };
+  } catch (e) {
+    return { available: false, formats: [] };
+  }
+}
+
+function applyNativeSupportToUI() {
+  const nativeOption = engineSelect.querySelector('option[value="native"]');
+  if (nativeSupport.available) {
+    nativeOption.textContent = 'Native BarcodeDetector (' + nativeSupport.formats.join(', ') + ')';
+  } else {
+    nativeOption.textContent = 'Native BarcodeDetector — unsupported on this browser/OS';
+    nativeOption.disabled = true;
+    if (engineSelect.value === 'native') engineSelect.value = 'auto';
+  }
+}
+
+function addField(label, value) {
+  const dt = document.createElement('dt');
+  dt.textContent = label;
+  const dd = document.createElement('dd');
+  dd.textContent = value;
+  fieldsEl.appendChild(dt);
+  fieldsEl.appendChild(dd);
+}
+
+function showResult({ text, format, engine, timestamp, rawByteLength, pointCount, metadata }) {
+  addField('Decoded via', engine);
+  addField('Format', format);
+  addField('Text length', String(text.length));
+  if (rawByteLength !== undefined) addField('Raw byte length', String(rawByteLength));
+  if (timestamp) addField('Scanned at', new Date(timestamp).toLocaleString());
+  if (pointCount !== undefined) addField('Finder points', String(pointCount));
+
+  if (metadata && metadata.size) {
+    for (const [key, value] of metadata.entries()) {
+      const name = RESULT_METADATA_TYPE_NAMES[key] || ('metadata #' + key);
+      let displayValue = value;
+      if (value instanceof Uint8Array || Array.isArray(value)) {
+        displayValue = Array.from(value).join(', ');
+      } else if (value !== null && typeof value === 'object') {
+        displayValue = JSON.stringify(value);
+      }
+      addField(name, String(displayValue));
+    }
+  }
+
+  rawTextEl.textContent = text;
+  scanView.hidden = true;
+  resultView.hidden = false;
+}
+
+function fromZXingResult(result) {
+  const metadata = result.getResultMetadata ? result.getResultMetadata() : undefined;
+  return {
+    text: result.getText(),
+    format: ZXingBrowser.BarcodeFormat[result.getBarcodeFormat()] || String(result.getBarcodeFormat()),
+    engine: 'ZXing.js',
+    timestamp: result.getTimestamp ? result.getTimestamp() : undefined,
+    rawByteLength: result.getRawBytes ? result.getRawBytes().length : undefined,
+    pointCount: result.getResultPoints ? result.getResultPoints().length : undefined,
+    metadata,
+  };
+}
+
+function fromNativeBarcode(barcode) {
+  return {
+    text: barcode.rawValue,
+    format: barcode.format,
+    engine: 'Native BarcodeDetector',
+    timestamp: Date.now(),
+    pointCount: barcode.cornerPoints ? barcode.cornerPoints.length : undefined,
+  };
+}
+
+function stopEverything() {
+  if (stopDecodeLoop) {
+    stopDecodeLoop();
+    stopDecodeLoop = null;
+  }
+  if (currentStream) {
+    currentStream.getTracks().forEach((t) => t.stop());
+    currentStream = null;
+    currentTrack = null;
+  }
+}
+
+function finishScan(shape) {
+  stopEverything();
+  showResult(shape);
+}
+
+// ---- ZXing.js engine ----
+async function runZXing(stream) {
+  const hints = new Map([[DECODE_HINT_TRY_HARDER, true]]);
+  const codeReader = new ZXingBrowser.BrowserMultiFormatReader(hints);
+  let stopped = false;
+  const controls = await codeReader.decodeFromStream(stream, videoEl, (result) => {
+    if (stopped || !result) return;
+    stopped = true;
+    finishScan(fromZXingResult(result));
+  });
+  stopDecodeLoop = () => {
+    stopped = true;
+    try { controls.stop(); } catch (e) { /* already stopped */ }
+  };
+}
+
+// ---- Native BarcodeDetector engine ----
+async function runNative(formats) {
+  const detector = new BarcodeDetector({ formats });
+  let stopped = false;
+  stopDecodeLoop = () => { stopped = true; };
+
+  const waitFrame = () => new Promise((resolve) => {
+    if (videoEl.requestVideoFrameCallback) videoEl.requestVideoFrameCallback(resolve);
+    else requestAnimationFrame(resolve);
+  });
+
+  while (!stopped) {
+    try {
+      const barcodes = await detector.detect(videoEl);
+      if (barcodes.length && !stopped) {
+        stopped = true;
+        finishScan(fromNativeBarcode(barcodes[0]));
+        return;
+      }
+    } catch (e) {
+      // transient (e.g. video not ready yet) - keep trying
+    }
+    await waitFrame();
+  }
+}
+
+async function pickEngineAndDecode(stream) {
+  const choice = engineSelect.value;
+  const useNative = choice !== 'zxing' && nativeSupport.available;
+
+  if (choice === 'native' && !nativeSupport.available) {
+    engineBadge.textContent = 'unavailable on this browser/OS — using ZXing';
+  }
+
+  if (useNative) {
+    engineBadge.textContent = 'native';
+    await runNative(nativeSupport.formats);
+  } else {
+    engineBadge.textContent = 'zxing.js';
+    await runZXing(stream);
+  }
+}
+
+// ---- Camera capability controls ----
+function refreshDebugJson() {
+  if (!currentTrack) return;
+  const caps = currentTrack.getCapabilities ? currentTrack.getCapabilities() : {};
+  const settings = currentTrack.getSettings ? currentTrack.getSettings() : {};
+  debugJsonEl.textContent = JSON.stringify({ capabilities: caps, settings, appliedAdvanced: advanced }, null, 2);
+}
+
+async function applyAdvanced() {
+  if (!currentTrack) return;
+  try {
+    await currentTrack.applyConstraints({ advanced: [advanced] });
+  } catch (e) {
+    console.warn('applyConstraints failed', advanced, e);
+  }
+  refreshDebugJson();
+}
+
+function buildControls() {
+  dynamicControls.innerHTML = '';
+  advanced = {};
+  if (!currentTrack || !currentTrack.getCapabilities) return;
+  const caps = currentTrack.getCapabilities();
+  const settings = currentTrack.getSettings ? currentTrack.getSettings() : {};
+
+  for (const key of ENUM_CAPS) {
+    if (!caps[key] || !caps[key].length) continue;
+    const row = document.createElement('div');
+    row.className = 'control-row';
+    const label = document.createElement('label');
+    label.textContent = key;
+    const select = document.createElement('select');
+    for (const opt of caps[key]) {
+      const o = document.createElement('option');
+      o.value = opt;
+      o.textContent = opt;
+      if (settings[key] === opt) o.selected = true;
+      select.appendChild(o);
+    }
+    select.addEventListener('change', () => {
+      advanced[key] = select.value;
+      applyAdvanced();
+    });
+    row.appendChild(label);
+    row.appendChild(select);
+    row.appendChild(document.createElement('span'));
+    dynamicControls.appendChild(row);
+  }
+
+  for (const key of RANGE_CAPS) {
+    if (!caps[key] || caps[key].min === undefined) continue;
+    const row = document.createElement('div');
+    row.className = 'control-row';
+    const label = document.createElement('label');
+    label.textContent = key;
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = caps[key].min;
+    input.max = caps[key].max;
+    input.step = caps[key].step || 1;
+    input.value = settings[key] !== undefined ? settings[key] : caps[key].min;
+    const output = document.createElement('output');
+    output.textContent = input.value;
+    input.addEventListener('input', () => {
+      output.textContent = input.value;
+      advanced[key] = Number(input.value);
+      // Manual focus/exposure only takes effect once the matching mode is 'manual'.
+      if (key === 'focusDistance' && caps.focusMode && caps.focusMode.includes('manual')) {
+        advanced.focusMode = 'manual';
+      }
+      if ((key === 'exposureTime' || key === 'exposureCompensation') && caps.exposureMode && caps.exposureMode.includes('manual')) {
+        advanced.exposureMode = 'manual';
+      }
+      applyAdvanced();
+      syncEnumSelectsToAdvanced();
+    });
+    row.appendChild(label);
+    row.appendChild(input);
+    row.appendChild(output);
+    dynamicControls.appendChild(row);
+  }
+
+  if (caps.torch) {
+    const row = document.createElement('div');
+    row.className = 'control-row';
+    const label = document.createElement('label');
+    label.textContent = 'torch';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.addEventListener('change', () => {
+      advanced.torch = input.checked;
+      applyAdvanced();
+    });
+    row.appendChild(label);
+    row.appendChild(input);
+    row.appendChild(document.createElement('span'));
+    dynamicControls.appendChild(row);
+  }
+
+  refreshDebugJson();
+}
+
+function syncEnumSelectsToAdvanced() {
+  // Reflect focusMode/exposureMode forced to 'manual' back into their <select> elements.
+  const selects = dynamicControls.querySelectorAll('select');
+  for (const select of selects) {
+    const row = select.closest('.control-row');
+    const key = row.querySelector('label').textContent;
+    if (advanced[key] !== undefined) select.value = advanced[key];
+  }
+}
+
+resetControlsBtn.addEventListener('click', async () => {
+  if (!currentTrack) return;
+  const caps = currentTrack.getCapabilities ? currentTrack.getCapabilities() : {};
+  advanced = {};
+  if (caps.focusMode && caps.focusMode.includes('continuous')) advanced.focusMode = 'continuous';
+  if (caps.exposureMode && caps.exposureMode.includes('continuous')) advanced.exposureMode = 'continuous';
+  if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) advanced.whiteBalanceMode = 'continuous';
+  if (caps.zoom) advanced.zoom = caps.zoom.min;
+  await applyAdvanced();
+  buildControls();
+});
+
+// ---- Device enumeration & (re)starting the pipeline ----
+async function populateDeviceList(selectedId) {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const cams = devices.filter((d) => d.kind === 'videoinput');
+  deviceSelect.innerHTML = '';
+  cams.forEach((d, i) => {
+    const o = document.createElement('option');
+    o.value = d.deviceId;
+    o.textContent = d.label || ('Camera ' + (i + 1));
+    if (d.deviceId === selectedId) o.selected = true;
+    deviceSelect.appendChild(o);
+  });
+}
+
+async function startPipeline(deviceId) {
+  stopEverything();
+  statusEl.hidden = false;
+  statusEl.setAttribute('aria-busy', 'true');
+  statusEl.textContent = 'Starting camera…';
+
+  const videoConstraints = {
+    width: { ideal: 4096 },
+    height: { ideal: 2160 },
+  };
+  if (deviceId) videoConstraints.deviceId = { exact: deviceId };
+
+  const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+  currentStream = stream;
+  currentTrack = stream.getVideoTracks()[0];
+  videoEl.srcObject = stream;
+  await videoEl.play().catch(() => {});
+
+  await populateDeviceList(currentTrack.getSettings().deviceId);
+  buildControls();
+
+  statusEl.textContent = 'Point the camera at a code';
+  statusEl.removeAttribute('aria-busy');
+
+  await pickEngineAndDecode(stream);
+}
+
+deviceSelect.addEventListener('change', () => {
+  startPipeline(deviceSelect.value).catch(reportError);
+});
+engineSelect.addEventListener('change', () => {
+  startPipeline(deviceSelect.value || undefined).catch(reportError);
+});
+
+function reportError(err) {
+  statusEl.removeAttribute('aria-busy');
+  statusEl.textContent = 'Camera error: ' + (err && err.message ? err.message : err);
+}
+
+(async () => {
+  nativeSupport = await probeNativeSupport();
+  applyNativeSupportToUI();
+  await startPipeline().catch(reportError);
+})();
+</script>
+</body>
+</html>

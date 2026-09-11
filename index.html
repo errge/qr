@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code128 Blow-up</title>
+<link rel="manifest" href="code128.webmanifest">
+<link rel="icon" href="code128-icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#1a1a2e">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
+<style>
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+  body { padding-block: 2rem; }
+
+  #form-view { padding-inline: 1rem; }
+  #version-tag {
+    position: fixed;
+    top: 0.35rem;
+    left: 0.5rem;
+    font-family: monospace;
+    font-size: 0.7rem;
+    opacity: 0.35;
+    color: var(--pico-muted-color);
+    pointer-events: none;
+    z-index: 1;
+  }
+  #form-view form { max-width: 30rem; margin: 0 auto; }
+  .add-row { display: flex; gap: 0.5rem; }
+  .add-row input { flex: 1; min-width: 0; margin: 0; }
+  .add-row button { flex: 0 0 auto; width: auto; margin: 0; }
+  #error { color: var(--pico-del-color); min-height: 1.2em; margin: 0.25rem 0 0; }
+
+  #barcode-view {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: #fff;
+    overflow: hidden;
+  }
+  #barcode-view.active { display: block; }
+  #barcode-rotator {
+    width: 100%;
+    height: 100%;
+  }
+  /* Forces a landscape-shaped rendering even while the phone/browser still
+     reports a portrait viewport - lets you skip fighting a flaky or disabled
+     auto-rotate. The box is built landscape-shaped (100vh x 100vw, swapped)
+     then rotated 90deg and centered so it exactly covers the portrait screen. */
+  #barcode-view.force-landscape #barcode-rotator {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100vh;
+    height: 100vw;
+    transform-origin: center center;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+  #barcode-content {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+  }
+  #barcode-content.slide-next { animation: slide-in-from-right 220ms ease-out; }
+  #barcode-content.slide-prev { animation: slide-in-from-left 220ms ease-out; }
+  @keyframes slide-in-from-right {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes slide-in-from-left {
+    from { transform: translateX(-100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  #barcode-text {
+    flex: 0 0 auto;
+    text-align: center;
+    font-family: monospace;
+    font-size: clamp(0.9rem, 4vw, 1.5rem);
+    padding: 0.5rem 3rem;
+    word-break: break-all;
+    color: #000;
+  }
+  #barcode-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  #barcode-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  #back-button {
+    position: fixed;
+    top: 0.5rem;
+    left: 0.5rem;
+    z-index: 1;
+    opacity: 0.35;
+    font-size: 0.8rem;
+    padding: 0.3rem 0.6rem;
+  }
+  #back-button:hover, #back-button:focus { opacity: 1; }
+  #barcode-counter {
+    position: fixed;
+    top: 1.2rem;
+    right: 1.5rem;
+    z-index: 1;
+    font-family: monospace;
+    font-size: 0.85rem;
+    opacity: 0.6;
+    color: #000;
+  }
+
+  #history-section { max-width: 30rem; margin: 0.5rem auto 0; }
+  .history-row { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: stretch; }
+  .history-index {
+    flex: 0 0 auto;
+    width: 2.8rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: var(--pico-muted-color);
+  }
+  .history-text {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    font-family: monospace;
+    font-size: 1rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin: 0;
+  }
+  .history-delete {
+    flex: 0 0 auto;
+    width: 3rem;
+    margin: 0;
+  }
+  .history-delete.armed {
+    background: var(--pico-del-color);
+    border-color: var(--pico-del-color);
+    color: #fff;
+  }
+</style>
+</head>
+<body>
+<main id="form-view" class="container">
+  <!-- Bump alongside sw.js's CACHE_NAME on every deploy - lets you confirm at
+       a glance that GitHub Pages redeployed *and* the service worker updated. -->
+  <div id="version-tag">v5</div>
+  <form id="form">
+    <div class="add-row">
+      <input id="text-input" name="text" type="text" pattern="[A-Za-z0-9]+" autocomplete="off" autocapitalize="off" spellcheck="false" required aria-label="Code">
+      <button type="submit">Add</button>
+    </div>
+    <p id="error" role="alert"></p>
+  </form>
+
+  <section id="history-section" hidden>
+    <div id="history-list"></div>
+  </section>
+</main>
+
+<div id="barcode-view">
+  <button id="back-button" class="outline secondary" type="button">Back</button>
+  <div id="barcode-counter"></div>
+  <div id="barcode-rotator">
+    <div id="barcode-content">
+      <div id="barcode-text"></div>
+      <div id="barcode-wrap">
+        <svg id="barcode-svg"></svg>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const formView = document.getElementById('form-view');
+const form = document.getElementById('form');
+const textInput = document.getElementById('text-input');
+const errorEl = document.getElementById('error');
+const barcodeView = document.getElementById('barcode-view');
+const barcodeContent = document.getElementById('barcode-content');
+const barcodeSvg = document.getElementById('barcode-svg');
+const barcodeTextEl = document.getElementById('barcode-text');
+const barcodeCounterEl = document.getElementById('barcode-counter');
+const backButton = document.getElementById('back-button');
+const historySection = document.getElementById('history-section');
+const historyList = document.getElementById('history-list');
+
+const VALID_PATTERN = /^[A-Za-z0-9]+$/;
+// Namespaced beyond just "history" because localStorage is scoped per origin,
+// not per path - every app under errge.github.io/* shares one storage bucket,
+// so a generic key name could collide with some future app on the same origin.
+const HISTORY_KEY = 'errge-qr-code128.history';
+const HISTORY_MAX = 10;
+const DELETE_CLICKS_TO_ARM = 5; // clicks after the first (arming) click, counting down 5,4,3,2,1,0
+const DELETE_RESET_MS = 2500; // disarm if no follow-up click within this long
+
+function genId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return Date.now() + '-' + Math.random().toString(36).slice(2);
+}
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveHistory(items) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(items));
+  } catch (e) { /* storage unavailable (e.g. private mode) - history just won't persist */ }
+}
+
+function addToHistory(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const items = loadHistory();
+  // Order is fixed once an item is added (only deletion ever moves things);
+  // re-adding an existing code must not reorder or duplicate it.
+  if (items.some((item) => item.text === trimmed)) return;
+  items.push({ id: genId(), text: trimmed });
+  if (items.length > HISTORY_MAX) items.splice(0, items.length - HISTORY_MAX); // drop oldest first
+  saveHistory(items);
+  renderHistory();
+}
+
+function removeFromHistory(id) {
+  const items = loadHistory().filter((item) => item.id !== id);
+  saveHistory(items);
+  renderHistory();
+}
+
+function renderHistory() {
+  const items = loadHistory();
+  historySection.hidden = items.length === 0;
+  historyList.innerHTML = '';
+
+  items.forEach((item, index) => {
+    const row = document.createElement('div');
+    row.className = 'history-row';
+
+    const indexLabel = document.createElement('span');
+    indexLabel.className = 'history-index';
+    indexLabel.textContent = (index + 1) + '/' + items.length;
+
+    const textButton = document.createElement('button');
+    textButton.type = 'button';
+    textButton.className = 'history-text outline';
+    textButton.textContent = item.text;
+    textButton.addEventListener('click', () => {
+      // Recomputed at click time (not just captured from this render) so the
+      // counter is correct even if the list changed in between.
+      const current = loadHistory();
+      const pos = current.findIndex((i) => i.id === item.id);
+      showBarcodeAndRecord(item.text, pos + 1, current.length);
+    });
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'history-delete outline secondary';
+    deleteButton.textContent = '\u{1F5D1}'; // trash icon, idle state
+    deleteButton.setAttribute('aria-label', 'Delete');
+    let armedCount = null; // null = idle; otherwise the number currently shown
+    let resetTimer = null;
+
+    deleteButton.addEventListener('click', () => {
+      clearTimeout(resetTimer);
+      if (armedCount === null) {
+        armedCount = DELETE_CLICKS_TO_ARM;
+        deleteButton.textContent = String(armedCount);
+        deleteButton.classList.add('armed');
+      } else if (armedCount > 0) {
+        armedCount -= 1;
+        deleteButton.textContent = String(armedCount);
+      }
+      if (armedCount === 0) {
+        removeFromHistory(item.id);
+        return;
+      }
+      resetTimer = setTimeout(() => {
+        armedCount = null;
+        deleteButton.textContent = '\u{1F5D1}';
+        deleteButton.classList.remove('armed');
+      }, DELETE_RESET_MS);
+    });
+
+    row.appendChild(indexLabel);
+    row.appendChild(textButton);
+    row.appendChild(deleteButton);
+    historyList.appendChild(row);
+  });
+}
+
+function showBarcode(text, position, total) {
+  // Shown small above the barcode so it can still be typed in by hand if a
+  // scanner ever fails to read it.
+  barcodeTextEl.textContent = text;
+  // Position/total within history - purely a UI aid, never part of the
+  // encoded data the shop's scanner reads.
+  barcodeCounterEl.textContent = (position && total) ? (position + '/' + total) : '';
+  JsBarcode(barcodeSvg, text, {
+    format: 'CODE128',
+    displayValue: false,
+    margin: 10,
+  });
+  // Stretch to fill the screen in both dimensions independently. Code128 only
+  // encodes information along the x-axis as relative bar widths, and a single
+  // horizontal scale factor preserves those ratios, so non-uniform stretching
+  // (different x/y scale) never corrupts the encoding - it just uses all the
+  // available screen real estate, in whatever orientation the phone is held.
+  barcodeSvg.setAttribute('preserveAspectRatio', 'none');
+  formView.hidden = true;
+  barcodeView.classList.add('active');
+}
+
+// Showing a code fullscreen (always triggered from a history row) also tries
+// to log it to history, but since it's already there this is a no-op - see
+// addToHistory's fixed-order guard.
+function showBarcodeAndRecord(text, position, total) {
+  const trimmed = text.trim();
+  showBarcode(trimmed, position, total);
+  addToHistory(trimmed);
+  currentHistoryIndex = position ? position - 1 : null;
+}
+
+// Swipe left/right on the fullscreen view to step through history without
+// going back to the list. Clamped at both ends - no wraparound.
+const SWIPE_MIN_DISTANCE = 50; // px, horizontal distance required to count as a swipe
+const SWIPE_MAX_OFF_AXIS = 60; // px, keep it mostly horizontal so scrolls/taps aren't misread
+let currentHistoryIndex = null; // 0-indexed position of the code currently shown fullscreen
+let touchStartX = null;
+let touchStartY = null;
+
+function playSlideAnimation(cls) {
+  barcodeContent.classList.remove('slide-next', 'slide-prev');
+  void barcodeContent.offsetWidth; // force reflow so the animation restarts even for repeated swipes
+  barcodeContent.classList.add(cls);
+}
+
+function navigateHistory(direction) {
+  if (currentHistoryIndex === null) return;
+  const items = loadHistory();
+  if (!items.length) return;
+  const newIndex = Math.min(items.length - 1, Math.max(0, currentHistoryIndex + direction));
+  if (newIndex === currentHistoryIndex) return; // already at the last/first one - don't roll around
+  currentHistoryIndex = newIndex;
+  showBarcode(items[newIndex].text, newIndex + 1, items.length);
+  playSlideAnimation(direction > 0 ? 'slide-next' : 'slide-prev');
+}
+
+// Fake landscape while the phone (and its flaky/disabled auto-rotate) still
+// reports a portrait viewport, by rotating the content 90deg via CSS - see
+// the #barcode-view.force-landscape rules. Driven off matchMedia rather than
+// device sensors, so it also behaves correctly if the phone genuinely is
+// rotated to real landscape (the rule then just doesn't apply).
+const portraitQuery = window.matchMedia('(orientation: portrait)');
+function updateForceLandscape() {
+  barcodeView.classList.toggle('force-landscape', portraitQuery.matches);
+}
+portraitQuery.addEventListener('change', updateForceLandscape);
+window.addEventListener('resize', updateForceLandscape);
+updateForceLandscape();
+
+barcodeView.addEventListener('touchstart', (e) => {
+  if (e.touches.length !== 1) return;
+  touchStartX = e.touches[0].clientX;
+  touchStartY = e.touches[0].clientY;
+});
+
+barcodeView.addEventListener('touchend', (e) => {
+  if (touchStartX === null) return;
+  const touch = e.changedTouches[0];
+  const deltaX = touch.clientX - touchStartX;
+  const deltaY = touch.clientY - touchStartY;
+  touchStartX = null;
+  touchStartY = null;
+
+  // The touchscreen always reports raw portrait coordinates, even while
+  // force-landscape has visually rotated everything 90deg - so the axis that
+  // *feels* horizontal to the user is actually the raw vertical one here.
+  const rotated = barcodeView.classList.contains('force-landscape');
+  const primary = rotated ? deltaY : deltaX;
+  const offAxis = rotated ? deltaX : deltaY;
+  if (Math.abs(primary) < SWIPE_MIN_DISTANCE || Math.abs(offAxis) > SWIPE_MAX_OFF_AXIS) return;
+  // Swiping left (perceived) moves forward toward the last code, right moves back toward the first.
+  navigateHistory(primary < 0 ? 1 : -1);
+});
+
+form.addEventListener('submit', (e) => {
+  e.preventDefault();
+  // Trim before validating so pasted text with stray leading/trailing
+  // whitespace isn't rejected by the alnum-only pattern.
+  const text = textInput.value.trim();
+  if (!VALID_PATTERN.test(text)) {
+    errorEl.textContent = 'Only letters (a-z, A-Z) and numbers (0-9) are allowed.';
+    return;
+  }
+  errorEl.textContent = '';
+  // Just files it into history - viewing it fullscreen happens from there.
+  addToHistory(text);
+  textInput.value = '';
+});
+
+backButton.addEventListener('click', () => {
+  barcodeView.classList.remove('active');
+  formView.hidden = false;
+  currentHistoryIndex = null;
+});
+
+renderHistory();
+
+// Pre-caches this page plus its CDN dependencies so it (and the history
+// stored in localStorage) keeps working with zero connectivity, e.g. at the
+// shop counter. Needs one successful online visit first to install.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
