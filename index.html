@@ -13,6 +13,10 @@
   html, body {
     height: 100%;
     margin: 0;
+    /* Without the old Fullscreen API hack, a downward drag is free to trigger
+       Chrome's native pull-to-refresh - disable that everywhere so it can
+       never eat a swipe or reload mid-errand. */
+    overscroll-behavior-y: none;
   }
   body { padding-block: 2rem; }
 
@@ -49,6 +53,7 @@
     inset: 0;
     background: #fff;
     overflow: hidden;
+    touch-action: none; /* leave all touch gestures here to our own swipe handler */
   }
   #barcode-view.active { display: block; }
   #barcode-rotator {
@@ -162,7 +167,7 @@
 <main id="form-view" class="container">
   <!-- Bump alongside sw.js's CACHE_NAME on every deploy - lets you confirm at
        a glance that GitHub Pages redeployed *and* the service worker updated. -->
-  <div id="version-tag">v6</div>
+  <div id="version-tag">v7</div>
   <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
@@ -398,15 +403,13 @@ barcodeView.addEventListener('touchend', (e) => {
   touchStartX = null;
   touchStartY = null;
 
-  // The touchscreen always reports raw portrait coordinates, even while
-  // force-landscape has visually rotated everything 90deg - so the axis that
-  // *feels* horizontal to the user is actually the raw vertical one here.
-  const rotated = barcodeView.classList.contains('force-landscape');
-  const primary = rotated ? deltaY : deltaX;
-  const offAxis = rotated ? deltaX : deltaY;
-  if (Math.abs(primary) < SWIPE_MIN_DISTANCE || Math.abs(offAxis) > SWIPE_MAX_OFF_AXIS) return;
-  // Swiping left (perceived) moves forward toward the last code, right moves back toward the first.
-  navigateHistory(primary < 0 ? 1 : -1);
+  // Plain physical left/right, always - the phone itself stays portrait the
+  // whole time (only the rendered barcode is rotated via CSS, to make it
+  // bigger; the shop scanner reads it fine at any angle), so there's no
+  // reason to remap axes based on force-landscape here.
+  if (Math.abs(deltaX) < SWIPE_MIN_DISTANCE || Math.abs(deltaY) > SWIPE_MAX_OFF_AXIS) return;
+  // Swiping left moves forward toward the last code, right moves back toward the first.
+  navigateHistory(deltaX < 0 ? 1 : -1);
 });
 
 form.addEventListener('submit', (e) => {
