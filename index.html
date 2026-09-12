@@ -6,7 +6,7 @@
 <title>Code128 Blow-up</title>
 <link rel="manifest" href="code128.webmanifest">
 <link rel="icon" href="code128-icon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#1a1a2e">
+<meta name="theme-color" content="#1a1a2f">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
 <style>
@@ -191,7 +191,7 @@
        in the manifest wouldn't do anything. This imperceptible color nudge is
        what actually makes chrome://webapks' "Update" button (or its once-a-day
        automatic check) have something real to detect. -->
-  <button id="version-tag" type="button" title="Tap to force-reload all files">v15</button>
+  <button id="version-tag" type="button" title="Tap to force-reload all files">v16</button>
   <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
@@ -493,6 +493,7 @@ function closeBarcodeView() {
   barcodeView.classList.remove('active');
   formView.hidden = false;
   currentHistoryIndex = null;
+  reloadIfUpdatePending();
 }
 
 // Phone/browser Back button (or gesture) while the barcode view is open pops
@@ -507,7 +508,24 @@ renderHistory();
 // Pre-caches this page plus its CDN dependencies so it (and the history
 // stored in localStorage) keeps working with zero connectivity, e.g. at the
 // shop counter. Needs one successful online visit first to install.
+//
+// Cache-first (see sw.js) means a normal launch always shows whatever was
+// cached as of the *previous* launch - a background update check happens on
+// every register() call below, but by the time a newer service worker
+// activates, this page has already rendered from the old cache. Rather than
+// wait for the *next* relaunch to pick it up, listen for that new worker
+// taking over and reload automatically - but only once it's safe, i.e. not
+// while a barcode is actively being shown to a scanner.
+let updatePending = false;
+function reloadIfUpdatePending() {
+  if (updatePending && !barcodeView.classList.contains('active')) location.reload();
+}
 if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    updatePending = true;
+    reloadIfUpdatePending();
+  }, { once: true });
+
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   });
