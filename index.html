@@ -6,7 +6,7 @@
 <title>Code128 Blow-up</title>
 <link rel="manifest" href="code128.webmanifest">
 <link rel="icon" href="code128-icon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#1a1a2f">
+<meta name="theme-color" content="#1a1a2e">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
 <style>
@@ -131,24 +131,6 @@
     height: 100%;
     display: block;
   }
-  #back-button {
-    position: fixed;
-    top: 0.6rem;
-    left: 0.6rem;
-    z-index: 1;
-    font-size: 1rem;
-    padding: 0.55rem 1.2rem;
-    opacity: 0.7;
-    /* #barcode-view's background is always plain white (needed for scanning
-       contrast) regardless of the device's light/dark theme, so this button
-       is given fixed colors instead of Pico's theme-driven ones - otherwise
-       a dark browser theme flips it to light-on-light and it nearly vanishes. */
-    background: #fff;
-    color: #1a1a2e;
-    border: 2px solid #1a1a2e;
-    border-radius: var(--pico-border-radius);
-  }
-  #back-button:hover, #back-button:focus { opacity: 1; }
   #barcode-counter {
     position: fixed;
     top: 1.2rem;
@@ -209,7 +191,7 @@
        in the manifest wouldn't do anything. This imperceptible color nudge is
        what actually makes chrome://webapks' "Update" button (or its once-a-day
        automatic check) have something real to detect. -->
-  <button id="version-tag" type="button" title="Tap to force-reload all files">v14</button>
+  <button id="version-tag" type="button" title="Tap to force-reload all files">v15</button>
   <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
@@ -225,7 +207,6 @@
 </main>
 
 <div id="barcode-view">
-  <button id="back-button" type="button">Back</button>
   <div id="barcode-counter"></div>
   <div id="barcode-slide">
     <div id="barcode-rotator">
@@ -249,7 +230,6 @@ const barcodeSlide = document.getElementById('barcode-slide');
 const barcodeSvg = document.getElementById('barcode-svg');
 const barcodeTextEl = document.getElementById('barcode-text');
 const barcodeCounterEl = document.getElementById('barcode-counter');
-const backButton = document.getElementById('back-button');
 const historySection = document.getElementById('history-section');
 const historyList = document.getElementById('history-list');
 
@@ -515,15 +495,9 @@ function closeBarcodeView() {
   currentHistoryIndex = null;
 }
 
-// The on-screen Back button goes through history.back() rather than closing
-// directly, so it consumes the entry pushed in showBarcodeAndRecord() and
-// stays balanced with the phone's/browser's own Back button below.
-backButton.addEventListener('click', () => {
-  history.back();
-});
-
 // Phone/browser Back button (or gesture) while the barcode view is open pops
-// that pushed entry - close the view instead of letting it exit the app.
+// the entry pushed in showBarcodeAndRecord() - close the view instead of
+// letting it exit the app.
 window.addEventListener('popstate', () => {
   if (barcodeView.classList.contains('active')) closeBarcodeView();
 });
