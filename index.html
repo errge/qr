@@ -29,9 +29,15 @@
     font-size: 0.7rem;
     opacity: 0.35;
     color: var(--pico-muted-color);
-    pointer-events: none;
     z-index: 1;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font-weight: normal;
+    cursor: pointer;
   }
+  #version-tag:hover, #version-tag:focus { opacity: 1; }
   #install-button {
     position: fixed;
     top: 0.35rem;
@@ -184,8 +190,9 @@
 <body>
 <main id="form-view" class="container">
   <!-- Bump alongside sw.js's CACHE_NAME on every deploy - lets you confirm at
-       a glance that GitHub Pages redeployed *and* the service worker updated. -->
-  <div id="version-tag">v8</div>
+       a glance that GitHub Pages redeployed *and* the service worker updated.
+       Tapping it force-clears the service worker/caches and reloads fresh. -->
+  <button id="version-tag" type="button" title="Tap to force-reload all files">v9</button>
   <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
@@ -520,6 +527,29 @@ installButton.addEventListener('click', async () => {
 window.addEventListener('appinstalled', () => {
   installButton.hidden = true;
   deferredInstallPrompt = null;
+});
+
+// Tapping the version tag unregisters the service worker, wipes every cache
+// it made, and reloads with a cache-busting URL - a manual escape hatch for
+// exactly this situation: the installed app is stuck on an old cached version
+// because it hasn't been relaunched (with a network connection) since the
+// last deploy, so the normal background update never got a chance to run.
+const versionTag = document.getElementById('version-tag');
+versionTag.addEventListener('click', async () => {
+  versionTag.textContent = '...';
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch (e) {
+    // best-effort - reload anyway below
+  }
+  location.href = location.pathname + '?cachebust=' + Date.now();
 });
 </script>
 </body>
