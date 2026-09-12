@@ -6,7 +6,7 @@
 <title>Code128 Blow-up</title>
 <link rel="manifest" href="code128.webmanifest">
 <link rel="icon" href="code128-icon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#1a1a2f">
+<meta name="theme-color" content="#1a1a2e">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
 <style>
@@ -191,7 +191,7 @@
        in the manifest wouldn't do anything. This imperceptible color nudge is
        what actually makes chrome://webapks' "Update" button (or its once-a-day
        automatic check) have something real to detect. -->
-  <button id="version-tag" type="button" title="Tap to force-reload all files">v16</button>
+  <button id="version-tag" type="button" title="Tap to force-reload all files">v17</button>
   <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
@@ -526,8 +526,20 @@ if ('serviceWorker' in navigator) {
     reloadIfUpdatePending();
   }, { once: true });
 
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+  // Relaunching an installed WebAPK often *resumes* an already-frozen page
+  // instance rather than performing a genuinely fresh navigation, so 'load'
+  // may simply never fire again - which would silently skip every future
+  // update check. 'pageshow' also fires on that kind of resume (check
+  // event.persisted), and 'visibilitychange' catches the app just coming
+  // back to the foreground at all, even with no navigation-like event.
+  // register() is safe to call repeatedly - it's how the spec's SW update
+  // check normally gets triggered - and .update() forces one explicitly too.
+  function registerAndCheckForUpdate() {
+    navigator.serviceWorker.register('sw.js').then((reg) => reg.update()).catch(() => {});
+  }
+  window.addEventListener('pageshow', registerAndCheckForUpdate);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') registerAndCheckForUpdate();
   });
 }
 
