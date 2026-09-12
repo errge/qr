@@ -6,7 +6,7 @@
 <title>Code128 Blow-up</title>
 <link rel="manifest" href="code128.webmanifest">
 <link rel="icon" href="code128-icon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#1a1a2e">
+<meta name="theme-color" content="#1a1a2f">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
 <style>
@@ -209,7 +209,7 @@
        in the manifest wouldn't do anything. This imperceptible color nudge is
        what actually makes chrome://webapks' "Update" button (or its once-a-day
        automatic check) have something real to detect. -->
-  <button id="version-tag" type="button" title="Tap to force-reload all files">v13</button>
+  <button id="version-tag" type="button" title="Tap to force-reload all files">v14</button>
   <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
@@ -253,7 +253,11 @@ const backButton = document.getElementById('back-button');
 const historySection = document.getElementById('history-section');
 const historyList = document.getElementById('history-list');
 
-const VALID_PATTERN = /^[A-Za-z0-9]+$/;
+// Printable ASCII only (0x20 space through 0x7E tilde) - this is exactly the
+// range Code128's Code Set B covers, so anything that passes here is
+// guaranteed encodable, while accented letters/emoji/other Unicode (which
+// Code128 can't represent) are rejected.
+const VALID_PATTERN = /^[\x20-\x7E]+$/;
 // Namespaced beyond just "history" because localStorage is scoped per origin,
 // not per path - every app under errge.github.io/* shares one storage bucket,
 // so a generic key name could collide with some future app on the same origin.
@@ -493,10 +497,10 @@ barcodeView.addEventListener('touchend', (e) => {
 form.addEventListener('submit', (e) => {
   e.preventDefault();
   // Trim before validating so pasted text with stray leading/trailing
-  // whitespace isn't rejected by the alnum-only pattern.
+  // whitespace isn't rejected - internal spaces are fine and kept as-is.
   const text = textInput.value.trim();
   if (!VALID_PATTERN.test(text)) {
-    errorEl.textContent = 'Only letters (a-z, A-Z) and numbers (0-9) are allowed.';
+    errorEl.textContent = 'Only plain ASCII text is allowed (no accents, emoji, or other Unicode).';
     return;
   }
   errorEl.textContent = '';
