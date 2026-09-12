@@ -1,4 +1,4 @@
-const CACHE_NAME = 'code128-v7'; // keep in sync with #version-tag in index.html
+const CACHE_NAME = 'code128-v8'; // keep in sync with #version-tag in index.html
 const ASSETS = [
   './index.html',
   './code128.webmanifest',

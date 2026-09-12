@@ -56,6 +56,34 @@
     touch-action: none; /* leave all touch gestures here to our own swipe handler */
   }
   #barcode-view.active { display: block; }
+  /* Carries the slide in/out animation, in plain raw screen-space left/right -
+     it sits OUTSIDE #barcode-rotator on purpose, so the animation is never
+     affected by that element's own 90deg rotation transform (the phone stays
+     physically portrait the whole time; only the barcode's rendering rotates). */
+  #barcode-slide {
+    width: 100%;
+    height: 100%;
+  }
+  #barcode-slide.anim-in-right { animation: slide-in-from-right 160ms ease-out; }
+  #barcode-slide.anim-in-left { animation: slide-in-from-left 160ms ease-out; }
+  #barcode-slide.anim-out-left { animation: slide-out-to-left 160ms ease-in; }
+  #barcode-slide.anim-out-right { animation: slide-out-to-right 160ms ease-in; }
+  @keyframes slide-in-from-right {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes slide-in-from-left {
+    from { transform: translateX(-100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes slide-out-to-left {
+    from { transform: translateX(0); opacity: 1; }
+    to { transform: translateX(-100%); opacity: 0; }
+  }
+  @keyframes slide-out-to-right {
+    from { transform: translateX(0); opacity: 1; }
+    to { transform: translateX(100%); opacity: 0; }
+  }
   #barcode-rotator {
     width: 100%;
     height: 100%;
@@ -78,16 +106,6 @@
     flex-direction: column;
     width: 100%;
     height: 100%;
-  }
-  #barcode-content.slide-next { animation: slide-in-from-right 220ms ease-out; }
-  #barcode-content.slide-prev { animation: slide-in-from-left 220ms ease-out; }
-  @keyframes slide-in-from-right {
-    from { transform: translateX(100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
-  }
-  @keyframes slide-in-from-left {
-    from { transform: translateX(-100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
   }
   #barcode-text {
     flex: 0 0 auto;
@@ -167,7 +185,7 @@
 <main id="form-view" class="container">
   <!-- Bump alongside sw.js's CACHE_NAME on every deploy - lets you confirm at
        a glance that GitHub Pages redeployed *and* the service worker updated. -->
-  <div id="version-tag">v7</div>
+  <div id="version-tag">v8</div>
   <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
@@ -185,11 +203,13 @@
 <div id="barcode-view">
   <button id="back-button" class="outline secondary" type="button">Back</button>
   <div id="barcode-counter"></div>
-  <div id="barcode-rotator">
-    <div id="barcode-content">
-      <div id="barcode-text"></div>
-      <div id="barcode-wrap">
-        <svg id="barcode-svg"></svg>
+  <div id="barcode-slide">
+    <div id="barcode-rotator">
+      <div id="barcode-content">
+        <div id="barcode-text"></div>
+        <div id="barcode-wrap">
+          <svg id="barcode-svg"></svg>
+        </div>
       </div>
     </div>
   </div>
@@ -201,7 +221,7 @@ const form = document.getElementById('form');
 const textInput = document.getElementById('text-input');
 const errorEl = document.getElementById('error');
 const barcodeView = document.getElementById('barcode-view');
-const barcodeContent = document.getElementById('barcode-content');
+const barcodeSlide = document.getElementById('barcode-slide');
 const barcodeSvg = document.getElementById('barcode-svg');
 const barcodeTextEl = document.getElementById('barcode-text');
 const barcodeCounterEl = document.getElementById('barcode-counter');
@@ -358,22 +378,47 @@ const SWIPE_MAX_OFF_AXIS = 60; // px, keep it mostly horizontal so scrolls/taps 
 let currentHistoryIndex = null; // 0-indexed position of the code currently shown fullscreen
 let touchStartX = null;
 let touchStartY = null;
+let historyTransitionInProgress = false;
 
-function playSlideAnimation(cls) {
-  barcodeContent.classList.remove('slide-next', 'slide-prev');
-  void barcodeContent.offsetWidth; // force reflow so the animation restarts even for repeated swipes
-  barcodeContent.classList.add(cls);
+const SLIDE_CLASSES = ['anim-in-left', 'anim-in-right', 'anim-out-left', 'anim-out-right'];
+
+// Slides the OLD code out first, swaps the barcode/text/counter only once it's
+// fully off-screen (invisible), then slides the NEW one in from the opposite
+// side - so there's never a moment where content instantly jumps while visible.
+function playTransition(outClass, inClass, swap) {
+  historyTransitionInProgress = true;
+  barcodeSlide.classList.remove(...SLIDE_CLASSES);
+  void barcodeSlide.offsetWidth; // force reflow so this restarts cleanly even mid-swipe-spam
+  barcodeSlide.classList.add(outClass);
+
+  barcodeSlide.addEventListener('animationend', function onOutEnd() {
+    barcodeSlide.removeEventListener('animationend', onOutEnd);
+    swap();
+    barcodeSlide.classList.remove(outClass);
+    void barcodeSlide.offsetWidth;
+    barcodeSlide.classList.add(inClass);
+
+    barcodeSlide.addEventListener('animationend', function onInEnd() {
+      barcodeSlide.removeEventListener('animationend', onInEnd);
+      barcodeSlide.classList.remove(inClass);
+      historyTransitionInProgress = false;
+    });
+  });
 }
 
 function navigateHistory(direction) {
-  if (currentHistoryIndex === null) return;
+  if (currentHistoryIndex === null || historyTransitionInProgress) return;
   const items = loadHistory();
   if (!items.length) return;
   const newIndex = Math.min(items.length - 1, Math.max(0, currentHistoryIndex + direction));
   if (newIndex === currentHistoryIndex) return; // already at the last/first one - don't roll around
-  currentHistoryIndex = newIndex;
-  showBarcode(items[newIndex].text, newIndex + 1, items.length);
-  playSlideAnimation(direction > 0 ? 'slide-next' : 'slide-prev');
+
+  const outClass = direction > 0 ? 'anim-out-left' : 'anim-out-right';
+  const inClass = direction > 0 ? 'anim-in-right' : 'anim-in-left';
+  playTransition(outClass, inClass, () => {
+    currentHistoryIndex = newIndex;
+    showBarcode(items[newIndex].text, newIndex + 1, items.length);
+  });
 }
 
 // Fake landscape while the phone (and its flaky/disabled auto-rotate) still
