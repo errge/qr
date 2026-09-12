@@ -6,7 +6,7 @@
 <title>Code128 Blow-up</title>
 <link rel="manifest" href="code128.webmanifest">
 <link rel="icon" href="code128-icon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#1a1a2e">
+<meta name="theme-color" content="#1a1a2f">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
 <style>
@@ -209,11 +209,11 @@
        in the manifest wouldn't do anything. This imperceptible color nudge is
        what actually makes chrome://webapks' "Update" button (or its once-a-day
        automatic check) have something real to detect. -->
-  <button id="version-tag" type="button" title="Tap to force-reload all files">v11</button>
+  <button id="version-tag" type="button" title="Tap to force-reload all files">v12</button>
   <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
-      <input id="text-input" name="text" type="text" pattern="[A-Za-z0-9]+" autocomplete="off" autocapitalize="off" spellcheck="false" required aria-label="Code">
+      <input id="text-input" name="text" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" required aria-label="Code">
       <button type="submit">Add</button>
     </div>
     <p id="error" role="alert"></p>
