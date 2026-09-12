@@ -6,7 +6,7 @@
 <title>Code128 Blow-up</title>
 <link rel="manifest" href="code128.webmanifest">
 <link rel="icon" href="code128-icon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#1a1a2e">
+<meta name="theme-color" content="#1a1a2f">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
 <style>
@@ -191,8 +191,17 @@
 <main id="form-view" class="container">
   <!-- Bump alongside sw.js's CACHE_NAME on every deploy - lets you confirm at
        a glance that GitHub Pages redeployed *and* the service worker updated.
-       Tapping it force-clears the service worker/caches and reloads fresh. -->
-  <button id="version-tag" type="button" title="Tap to force-reload all files">v9</button>
+       Tapping it force-clears the service worker/caches and reloads fresh.
+
+       Also flip the last hex digit of theme_color (alternate e/f) in both the
+       <meta name="theme-color"> tag below AND code128.webmanifest whenever you
+       bump this. Android's WebAPK install is only refreshed by Chrome when one
+       of a small fixed set of real manifest fields changes (name, icons,
+       theme_color, etc) - it never looks at custom fields, so a "version" key
+       in the manifest wouldn't do anything. This imperceptible color nudge is
+       what actually makes chrome://webapks' "Update" button (or its once-a-day
+       automatic check) have something real to detect. -->
+  <button id="version-tag" type="button" title="Tap to force-reload all files">v10</button>
   <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
