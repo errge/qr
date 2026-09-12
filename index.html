@@ -6,7 +6,7 @@
 <title>Code128 Blow-up</title>
 <link rel="manifest" href="code128.webmanifest">
 <link rel="icon" href="code128-icon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#1a1a2f">
+<meta name="theme-color" content="#1a1a2e">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
 <style>
@@ -209,7 +209,7 @@
        in the manifest wouldn't do anything. This imperceptible color nudge is
        what actually makes chrome://webapks' "Update" button (or its once-a-day
        automatic check) have something real to detect. -->
-  <button id="version-tag" type="button" title="Tap to force-reload all files">v12</button>
+  <button id="version-tag" type="button" title="Tap to force-reload all files">v13</button>
   <button id="install-button" class="outline" type="button" hidden>Install app</button>
   <form id="form">
     <div class="add-row">
@@ -481,6 +481,11 @@ barcodeView.addEventListener('touchend', (e) => {
   // bigger; the shop scanner reads it fine at any angle), so there's no
   // reason to remap axes based on force-landscape here.
   if (Math.abs(deltaX) < SWIPE_MIN_DISTANCE || Math.abs(deltaY) > SWIPE_MAX_OFF_AXIS) return;
+  // A real drag happened, so stop the browser from also synthesizing a
+  // delayed "ghost click" from this same touch sequence - left unprevented,
+  // that phantom click can land later on whatever's under the finger next
+  // (e.g. the Back button), silently eating its first real tap.
+  e.preventDefault();
   // Swiping left moves forward toward the last code, right moves back toward the first.
   navigateHistory(deltaX < 0 ? 1 : -1);
 });
